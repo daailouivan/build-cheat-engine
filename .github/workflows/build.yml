@@ -1,7 +1,7 @@
 name: Build Cheat Engine
 
 # -------------------------------------------------
-# 1. Triggers – push + manual
+# 1. Triggers – push + manual (MUST be at the same level)
 # -------------------------------------------------
 on:
   workflow_dispatch:
@@ -27,7 +27,7 @@ on:
     tags: [ 'v*' ]
 
 # -------------------------------------------------
-# 2. Which ref we actually build
+# 2. Ref we build + artifact name mapping
 # -------------------------------------------------
 env:
   REF_TO_BUILD: >-
@@ -37,12 +37,11 @@ env:
          (github.event.inputs.version == 'stable-7.5' && '7.5' || 'master')) ||
         'master' }}
 
-  # master → dev in the artifact name
   ARTIFACT_REF: >-
     ${{ env.REF_TO_BUILD == 'master' && 'dev' || env.REF_TO_BUILD }}
 
 # -------------------------------------------------
-# 3. WINDOWS (the only platform that needed the fix)
+# 3. WINDOWS (only platform that needed the fix)
 # -------------------------------------------------
 jobs:
   build-windows:
@@ -50,7 +49,6 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      # ---- checkout -------------------------------------------------
       - name: Checkout Cheat Engine
         uses: actions/checkout@v4
         with:
@@ -58,7 +56,6 @@ jobs:
           ref: ${{ env.REF_TO_BUILD }}
           submodules: recursive
 
-      # ---- cache Lazarus --------------------------------------------
       - name: Cache Lazarus
         id: cache
         uses: actions/cache@v4
@@ -66,14 +63,12 @@ jobs:
           path: C:\lazarus
           key: lazarus-2.2.2-win-${{ hashFiles('**/cheatengine.lpi') }}
 
-      # ---- install Lazarus (only when cache missed) -----------------
       - name: Install Lazarus 2.2.2
         if: steps.cache.outputs.cache-hit != 'true'
         uses: gcarreno/setup-lazarus@v3.2.15
         with:
           lazarus-version: "2.2.2"
 
-      # ---- find lazbuild.exe (works for any folder) -----------------
       - name: Find lazbuild.exe
         id: find
         shell: pwsh
@@ -81,11 +76,10 @@ jobs:
           $exe = Get-ChildItem "C:\" -Recurse -Path "lazbuild.exe" -ErrorAction SilentlyContinue |
                  Where-Object { $_.FullName -like "*lazarus*" } |
                  Select-Object -First 1
-          if (-not $exe) { Write-Error "lazbuild.exe not found anywhere"; exit 1 }
+          if (-not $exe) { Write-Error "lazbuild.exe not found"; exit 1 }
           Write-Output "LAZBUILD=$($exe.FullName)" >> $env:GITHUB_ENV
           & $exe.FullName --version
 
-      # ---- build ----------------------------------------------------
       - name: Build (main‑only)
         if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
         shell: pwsh
@@ -94,7 +88,6 @@ jobs:
             --cpu=x86_64 `
             --build-mode="Release 64-Bit O4 AVX2"
 
-      # ---- package --------------------------------------------------
       - name: Package & Upload
         shell: pwsh
         run: |
@@ -108,7 +101,7 @@ jobs:
           path: CE-*.7z
 
   # -------------------------------------------------
-  # LINUX (unchanged – works out‑of‑the‑box)
+  # LINUX
   # -------------------------------------------------
   build-linux:
     runs-on: ubuntu-latest
@@ -133,7 +126,7 @@ jobs:
           path: CE-*-linux64.7z
 
   # -------------------------------------------------
-  # macOS (unchanged)
+  # macOS
   # -------------------------------------------------
   build-macos:
     runs-on: macos-latest
