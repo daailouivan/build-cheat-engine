@@ -1,10 +1,10 @@
 name: Build Cheat Engine
 
 # ──────────────────────────────────────────────────────────────
-# 1. Triggers + UI selectors
+# 1. Triggers – BOTH manual AND automatic
 # ──────────────────────────────────────────────────────────────
 on:
-  workflow_dispatch:
+  workflow_dispatch:                     # ← manual run with UI selectors
     inputs:
       version:
         description: "Source version"
@@ -22,7 +22,8 @@ on:
         options:
           - main-only
           - all-components
-  push:
+
+  push:                                 # ← AUTOMATIC runs on push
     branches: [ master, develop ]
     tags: [ 'v*' ]
 
@@ -56,4 +57,83 @@ jobs:
       # ---------------------------------------------------------
       # 2. Cache Lazarus + compiled units
       # ---------------------------------------------------------
-      - name: Cache Lazarus & compiled
+      - name: Cache Lazarus & compiled objects
+        id: cache-lazarus
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\lazarus
+            **/*.o
+            **/*.ppu
+            **/*.compiled
+          key: >-
+            lazarus-2.2.2-${{ runner.os }}-${{ hashFiles('Cheat Engine/cheatengine.lpi') }}
+          restore-keys: |
+            lazarus-2.2.2-${{ runner.os }}
+
+      # ---------------------------------------------------------
+      # 3. Install Lazarus (only if cache missed)
+      # ---------------------------------------------------------
+      - name: Install Lazarus 2.2.2
+        if: steps.cache-lazarus.outputs.cache-hit != 'true'
+        uses: gcarreno/setup-lazarus@v3.2.15
+        with:
+          lazarus-version: "2.2.2"
+
+      # ---------------------------------------------------------
+      # 4. Log build info
+      # ---------------------------------------------------------
+      - name: Log build details
+        shell: pwsh
+        run: |
+          Write-Output "Version : ${{ env.REF_TO_BUILD }}"
+          Write-Output "Mode    : ${{ github.event.inputs.build_mode || 'main-only (auto)' }}"
+          Write-Output "Cache   : ${{ steps.cache-lazarus.outputs.cache-hit == 'true' && 'HIT' || 'MISS' }}"
+
+      # ---------------------------------------------------------
+      # 5. BUILD: Main application only (default)
+      # ---------------------------------------------------------
+      - name: Build Main Application (x86_64 AVX2)
+        if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
+        shell: pwsh
+        run: |
+          lazbuild -B "Cheat Engine/cheatengine.lpi" `
+                   --cpu=x86_64 `
+                   --build-mode="Release 64-Bit O4 AVX2"
+
+      # ---------------------------------------------------------
+      # 6. BUILD: All components (uncomment to enable)
+      # ---------------------------------------------------------
+      # - name: Build ALL .lpi projects (tutorial, DBVM, etc.)
+      #   if: ${{ github.event.inputs.build_mode == 'all-components' }}
+      #   shell: pwsh
+      #   run: |
+      #     Get-ChildItem -Recurse -Filter *.lpi |
+      #       ForEach-Object {
+      #         Write-Output "Building $_"
+      #         lazbuild -B $_.FullName `
+      #                  --cpu=x86_64 `
+      #                  --build-mode="Release 64-Bit O4 AVX2"
+      #       }
+
+      # ---------------------------------------------------------
+      # 7. Package output
+      # ---------------------------------------------------------
+      - name: Create archive
+        shell: pwsh
+        run: |
+          $mode = "${{ github.event.inputs.build_mode || 'main-only' }}"
+          $ref  = "${{ env.REF_TO_BUILD }}".Replace('/', '-')
+          $name = "CE-$ref-$mode.7z"
+          7z a -t7z -mx=9 $name ".\Cheat Engine\bin\*"
+          Write-Output "Archive: $name"
+
+      # ---------------------------------------------------------
+      # 8. Upload artifact
+      # ---------------------------------------------------------
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CE-${{ env.REF_TO_BUILD }}-${{ github.event.inputs.build_mode || 'main-only' }}
+          path: CE-*.7z
+          if-no-files-found: error
