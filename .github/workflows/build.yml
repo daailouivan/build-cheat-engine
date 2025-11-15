@@ -1,11 +1,19 @@
 name: Build Cheat Engine
 
 # ──────────────────────────────────────────────────────────────
-# 1. Triggers + Build-mode selector
+# 1. Triggers + UI selectors
 # ──────────────────────────────────────────────────────────────
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: "Source version"
+        required: true
+        default: bleeding-edge
+        type: choice
+        options:
+          - stable-7.5
+          - bleeding-edge
       build_mode:
         description: "What to build"
         required: true
@@ -15,19 +23,19 @@ on:
           - main-only
           - all-components
   push:
-    branches: [ main, develop ]
+    branches: [ master, develop ]
     tags: [ 'v*' ]
 
 # ──────────────────────────────────────────────────────────────
-# 2. Dynamic ref selection (stable vs bleeding-edge)
+# 2. Dynamic ref selection
 # ──────────────────────────────────────────────────────────────
 env:
   REF_TO_BUILD: ${{ 
         github.event_name == 'push' && 
-        (startsWith(github.ref, 'refs/tags/') && github.ref_name || 'main') ||
+        (startsWith(github.ref, 'refs/tags/') && github.ref_name || 'master') ||
         (github.event_name == 'workflow_dispatch' && 
-         (github.event.inputs.build_mode == 'main-only' && '7.5' || 'main')) ||
-        'main' }}
+         (github.event.inputs.version == 'stable-7.5' && '7.5' || 'master')) ||
+        'master' }}
 
 jobs:
   build:
@@ -36,7 +44,7 @@ jobs:
 
     steps:
       # ---------------------------------------------------------
-      # 1. Checkout the selected source version
+      # 1. Checkout source
       # ---------------------------------------------------------
       - name: Checkout Cheat Engine (${{ env.REF_TO_BUILD }})
         uses: actions/checkout@v4
@@ -48,83 +56,4 @@ jobs:
       # ---------------------------------------------------------
       # 2. Cache Lazarus + compiled units
       # ---------------------------------------------------------
-      - name: Cache Lazarus & compiled objects
-        id: cache-lazarus
-        uses: actions/cache@v4
-        with:
-          path: |
-            C:\lazarus
-            **/*.o
-            **/*.ppu
-            **/*.compiled
-          key: >-
-            lazarus-2.2.2-${{ runner.os }}-${{ hashFiles('Cheat Engine/cheatengine.lpi') }}
-          restore-keys: |
-            lazarus-2.2.2-${{ runner.os }}-
-
-      # ---------------------------------------------------------
-      # 3. Install Lazarus (only if cache missed)
-      # ---------------------------------------------------------
-      - name: Install Lazarus 2.2.2
-        if: steps.cache-lazarus.outputs.cache-hit != 'true'
-        uses: gcarreno/setup-lazarus@v3.2.15
-        with:
-          lazarus-version: "2.2.2"
-
-      # ---------------------------------------------------------
-      # 4. Log build details
-      # ---------------------------------------------------------
-      - name: Log build details
-        shell: pwsh
-        run: |
-          Write-Output "Ref : ${{ env.REF_TO_BUILD }}"
-          Write-Output "Mode: ${{ github.event.inputs.build_mode || 'main-only (auto)' }}"
-          Write-Output "Cache hit: ${{ steps.cache-lazarus.outputs.cache-hit }}"
-
-      # ---------------------------------------------------------
-      # 5. BUILD – MAIN-APP ONLY (default)
-      # ---------------------------------------------------------
-      - name: Build Main Application (x86_64 AVX2)
-        if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
-        shell: pwsh
-        run: |
-          lazbuild -B "Cheat Engine/cheatengine.lpi" `
-                   --cpu=x86_64 `
-                   --build-mode="Release 64-Bit O4 AVX2"
-
-      # ---------------------------------------------------------
-      # 6. BUILD – ALL COMPONENTS (uncomment to enable)
-      # ---------------------------------------------------------
-      # - name: Build ALL .lpi projects (tutorial, DBVM, etc.)
-      #   if: ${{ github.event.inputs.build_mode == 'all-components' }}
-      #   shell: pwsh
-      #   run: |
-      #     Get-ChildItem -Recurse -Filter *.lpi |
-      #       ForEach-Object {
-      #         Write-Output "Building $_"
-      #         lazbuild -B $_.FullName `
-      #                  --cpu=x86_64 `
-      #                  --build-mode="Release 64-Bit O4 AVX2"
-      #       }
-
-      # ---------------------------------------------------------
-      # 7. Package the output
-      # ---------------------------------------------------------
-      - name: Create archive
-        shell: pwsh
-        run: |
-          $mode = "${{ github.event.inputs.build_mode || 'main-only' }}"
-          $ref  = "${{ env.REF_TO_BUILD }}".Replace('/', '-')
-          $name = "CE-$ref-$mode.7z"
-          7z a -t7z -mx=9 $name ".\Cheat Engine\bin\*"
-          Write-Output "Archive: $name"
-
-      # ---------------------------------------------------------
-      # 8. Upload artifact
-      # ---------------------------------------------------------
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CE-${{ env.REF_TO_BUILD }}-${{ github.event.inputs.build_mode || 'main-only' }}
-          path: CE-*.7z
-          if-no-files-found: error
+      - name: Cache Lazarus & compiled
