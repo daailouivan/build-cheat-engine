@@ -1,0 +1,141 @@
+name: Build Cheat Engine
+
+# ──────────────────────────────────────────────────────────────
+# Triggers
+# ──────────────────────────────────────────────────────────────
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Source version
+        required: true
+        default: bleeding-edge
+        type: choice
+        options: [stable-7.5, bleeding-edge]
+      build_mode:
+        description: What to build
+        required: true
+        default: main-only
+        type: choice
+        options: [main-only, all-components]
+  push:
+    branches: [master, develop]
+    tags: [v*]
+
+# ──────────────────────────────────────────────────────────────
+# Ref + artifact name
+# ──────────────────────────────────────────────────────────────
+env:
+  REF_TO_BUILD: >-
+    ${{ github.event_name == 'push' && 
+        (startsWith(github.ref, 'refs/tags/') && github.ref_name || 'master') ||
+        (github.event_name == 'workflow_dispatch' && 
+         (github.event.inputs.version == 'stable-7.5' && '7.5' || 'master')) ||
+        'master' }}
+
+jobs:
+  # ── WINDOWS ─────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: cheat-engine/cheat-engine
+          ref: ${{ env.REF_TO_BUILD }}
+          submodules: recursive
+
+      - name: Cache Lazarus
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: C:\lazarus
+          key: lazarus-2.2.2-win-${{ hashFiles('**/cheatengine.lpi') }}
+
+      - name: Install Lazarus
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: gcarreno/setup-lazarus@v3.2.15
+        with:
+          lazarus-version: "2.2.2"
+
+      # ── Set ARTIFACT_REF (master → dev) ───────────────────────
+      - name: Set artifact ref
+        shell: pwsh
+        run: |
+          $ref = "${{ env.REF_TO_BUILD }}"
+          $artifact = if ($ref -eq 'master') { 'dev' } else { $ref }
+          echo "ARTIFACT_REF=$artifact" >> $env:GITHUB_ENV
+
+      # ── Find lazbuild.exe (FIXED) ─────────────────────────────
+      - name: Find lazbuild.exe
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "C:\" -Recurse -Filter "lazbuild.exe" -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -like "*lazarus*" } |
+                 Select-Object -First 1
+          if (-not $exe) { Write-Error "lazbuild.exe not found"; exit 1 }
+          echo "LAZBUILD=$($exe.FullName)" >> $env:GITHUB_ENV
+          & $exe.FullName --version
+
+      - name: Build
+        if: ${{ github.event.inputs.build_mode != 'all-components' }}
+        shell: pwsh
+        run: |
+          & "$env:LAZBUILD" -B "Cheat Engine/cheatengine.lpi" `
+            --cpu=x86_64 `
+            --build-mode="Release 64-Bit O4 AVX2"
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $mode = "${{ github.event.inputs.build_mode || 'main-only' }}"
+          $name = "CE-${{ env.ARTIFACT_REF }}-$mode-win64.7z"
+          7z a -t7z -mx=9 $name "Cheat Engine/Cheat Engine/bin/*"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: CE-${{ env.ARTIFACT_REF }}-${{ github.event.inputs.build_mode || 'main-only' }}-win64
+          path: CE-*.7z
+
+  # ── LINUX & macOS (unchanged) ───────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: cheat-engine/cheat-engine, ref: ${{ env.REF_TO_BUILD }}, submodules: recursive }
+      - run: sudo apt-get update && sudo apt-get install -y lazarus p7zip-full
+      - name: Set artifact ref
+        run: echo "ARTIFACT_REF=$(if [ '${{ env.REF_TO_BUILD }}' = 'master' ]; then echo dev; else echo ${{ env.REF_TO_BUILD }}; fi)" >> $GITHUB_ENV
+      - name: Build
+        if: ${{ github.event.inputs.build_mode != 'all-components' }}
+        run: lazbuild -B "Cheat Engine/cheatengine.lpi" --cpu=x86_64 --build-mode="Release 64-Bit O4 AVX2"
+      - name: Package
+        run: |
+          mode="${{ github.event.inputs.build_mode || 'main-only' }}"
+          7z a -t7z -mx=9 "CE-${{ env.ARTIFACT_REF }}-$mode-linux64.7z" "Cheat Engine/Cheat Engine/bin/"*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CE-${{ env.ARTIFACT_REF }}-${{ github.event.inputs.build_mode || 'main-only' }}-linux64
+          path: CE-*-linux64.7z
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { repository: cheat-engine/cheat-engine, ref: ${{ env.REF_TO_BUILD }}, submodules: recursive }
+      - run: brew update && brew install --cask lazarus && brew install p7zip
+      - name: Set artifact ref
+        run: echo "ARTIFACT_REF=$(if [ '${{ env.REF_TO_BUILD }}' = 'master' ]; then echo dev; else echo ${{ env.REF_TO_BUILD }}; fi)" >> $GITHUB_ENV
+      - name: Build
+        if: ${{ github.event.inputs.build_mode != 'all-components' }}
+        run: lazbuild -B "Cheat Engine/cheatengine.lpi" --cpu=x86_64 --build-mode="Release 64-Bit O4 AVX2"
+      - name: Package
+        run: |
+          mode="${{ github.event.inputs.build_mode || 'main-only' }}"
+          7z a -t7z -mx=9 "CE-${{ env.ARTIFACT_REF }}-$mode-mac64.7z" "Cheat Engine/Cheat Engine/bin/"*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CE-${{ env.ARTIFACT_REF }}-${{ github.event.inputs.build_mode || 'main-only' }}-mac64
+          path: CE-*-mac64.7z
