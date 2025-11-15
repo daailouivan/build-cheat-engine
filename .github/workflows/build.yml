@@ -1,8 +1,8 @@
 name: Build Cheat Engine
 
-# ──────────────────────────────────────────────────────────────
-# Triggers
-# ──────────────────────────────────────────────────────────────
+# -------------------------------------------------
+# 1. Triggers – push + manual
+# -------------------------------------------------
 on:
   workflow_dispatch:
     inputs:
@@ -26,9 +26,9 @@ on:
     branches: [ master, develop ]
     tags: [ 'v*' ]
 
-# ──────────────────────────────────────────────────────────────
-# Dynamic ref + artifact name mapping
-# ──────────────────────────────────────────────────────────────
+# -------------------------------------------------
+# 2. Which ref we actually build
+# -------------------------------------------------
 env:
   REF_TO_BUILD: >-
     ${{ github.event_name == 'push' && 
@@ -37,26 +37,28 @@ env:
          (github.event.inputs.version == 'stable-7.5' && '7.5' || 'master')) ||
         'master' }}
 
-  # master → dev in artifact names
+  # master → dev in the artifact name
   ARTIFACT_REF: >-
     ${{ env.REF_TO_BUILD == 'master' && 'dev' || env.REF_TO_BUILD }}
 
-# ──────────────────────────────────────────────────────────────
-# WINDOWS
-# ──────────────────────────────────────────────────────────────
+# -------------------------------------------------
+# 3. WINDOWS (the only platform that needed the fix)
+# -------------------------------------------------
 jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 60
 
     steps:
-      - name: Checkout
+      # ---- checkout -------------------------------------------------
+      - name: Checkout Cheat Engine
         uses: actions/checkout@v4
         with:
           repository: cheat-engine/cheat-engine
           ref: ${{ env.REF_TO_BUILD }}
           submodules: recursive
 
+      # ---- cache Lazarus --------------------------------------------
       - name: Cache Lazarus
         id: cache
         uses: actions/cache@v4
@@ -64,24 +66,27 @@ jobs:
           path: C:\lazarus
           key: lazarus-2.2.2-win-${{ hashFiles('**/cheatengine.lpi') }}
 
-      - name: Install Lazarus
+      # ---- install Lazarus (only when cache missed) -----------------
+      - name: Install Lazarus 2.2.2
         if: steps.cache.outputs.cache-hit != 'true'
         uses: gcarreno/setup-lazarus@v3.2.15
         with:
           lazarus-version: "2.2.2"
 
+      # ---- find lazbuild.exe (works for any folder) -----------------
       - name: Find lazbuild.exe
         id: find
         shell: pwsh
         run: |
-          $exe = Get-ChildItem "C:\" -Path "lazbuild.exe" -Recurse -ErrorAction SilentlyContinue |
+          $exe = Get-ChildItem "C:\" -Recurse -Path "lazbuild.exe" -ErrorAction SilentlyContinue |
                  Where-Object { $_.FullName -like "*lazarus*" } |
                  Select-Object -First 1
-          if (-not $exe) { Write-Error "lazbuild.exe not found"; exit 1 }
+          if (-not $exe) { Write-Error "lazbuild.exe not found anywhere"; exit 1 }
           Write-Output "LAZBUILD=$($exe.FullName)" >> $env:GITHUB_ENV
           & $exe.FullName --version
 
-      - name: Build
+      # ---- build ----------------------------------------------------
+      - name: Build (main‑only)
         if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
         shell: pwsh
         run: |
@@ -89,11 +94,12 @@ jobs:
             --cpu=x86_64 `
             --build-mode="Release 64-Bit O4 AVX2"
 
+      # ---- package --------------------------------------------------
       - name: Package & Upload
         shell: pwsh
         run: |
           $mode = "${{ github.event.inputs.build_mode || 'main-only' }}"
-          $ref = "${{ env.ARTIFACT_REF }}"
+          $ref  = "${{ env.ARTIFACT_REF }}"
           $name = "CE-$ref-$mode-win64.7z"
           7z a -t7z -mx=9 $name "Cheat Engine/Cheat Engine/bin/*"
       - uses: actions/upload-artifact@v4
@@ -101,9 +107,9 @@ jobs:
           name: CE-${{ env.ARTIFACT_REF }}-${{ github.event.inputs.build_mode || 'main-only' }}-win64
           path: CE-*.7z
 
-  # ──────────────────────────────────────────────────────────────
-  # LINUX
-  # ──────────────────────────────────────────────────────────────
+  # -------------------------------------------------
+  # LINUX (unchanged – works out‑of‑the‑box)
+  # -------------------------------------------------
   build-linux:
     runs-on: ubuntu-latest
     steps:
@@ -126,9 +132,9 @@ jobs:
           name: CE-${{ env.ARTIFACT_REF }}-${{ github.event.inputs.build_mode || 'main-only' }}-linux64
           path: CE-*-linux64.7z
 
-  # ──────────────────────────────────────────────────────────────
-  # macOS
-  # ──────────────────────────────────────────────────────────────
+  # -------------------------------------------------
+  # macOS (unchanged)
+  # -------------------------------------------------
   build-macos:
     runs-on: macos-latest
     steps:
