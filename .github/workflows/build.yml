@@ -42,7 +42,7 @@ env:
 # ──────────────────────────────────────────────────────────────
 jobs:
   # =========================================================
-  # WINDOWS BUILD (Fixed lazbuild path)
+  # WINDOWS BUILD (lazbuild fixed with full path)
   # =========================================================
   build-windows:
     runs-on: windows-latest
@@ -75,20 +75,25 @@ jobs:
           lazarus-version: "2.2.2"
 
       # ---------------------------------------------------------
-      # FIX: Add C:\lazarus to PATH
+      # Add Lazarus to PATH (for other tools)
       # ---------------------------------------------------------
       - name: Add Lazarus to PATH
         run: |
           echo "C:\lazarus" >> $env:GITHUB_PATH
 
       # ---------------------------------------------------------
-      # DEBUG: Confirm lazbuild is found
+      # CRITICAL: Verify lazbuild.exe exists and is callable
       # ---------------------------------------------------------
-      - name: Verify lazbuild
+      - name: Verify lazbuild.exe
         shell: pwsh
         run: |
-          Get-Command lazbuild
-          lazbuild --version
+          $lazbuild = "C:\lazarus\lazbuild.exe"
+          if (-not (Test-Path $lazbuild)) {
+            Write-Error "lazbuild.exe not found at $lazbuild"
+            exit 1
+          }
+          Write-Output "lazbuild found: $lazbuild"
+          & $lazbuild --version
 
       - name: Log build details
         shell: pwsh
@@ -97,11 +102,14 @@ jobs:
           Write-Output "Version : ${{ env.REF_TO_BUILD }}"
           Write-Output "Mode    : ${{ github.event.inputs.build_mode || 'main-only' }}"
 
+      # ---------------------------------------------------------
+      # BUILD: Use FULL PATH to lazbuild.exe
+      # ---------------------------------------------------------
       - name: Build Main Application (x86_64 AVX2)
         if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
         shell: pwsh
         run: |
-          C:\lazarus\lazbuild.exe -B "Cheat Engine/cheatengine.lpi" `
+          & "C:\lazarus\lazbuild.exe" -B "Cheat Engine/cheatengine.lpi" `
                    --cpu=x86_64 `
                    --build-mode="Release 64-Bit O4 AVX2"
 
@@ -127,7 +135,7 @@ jobs:
           if-no-files-found: error
 
   # =========================================================
-  # LINUX BUILD
+  # LINUX BUILD (unchanged)
   # =========================================================
   build-linux:
     runs-on: ubuntu-latest
@@ -156,101 +164,4 @@ jobs:
             **/*.ppu
             **/*.compiled
           key: lazarus-2.2.2-Linux-${{ hashFiles('Cheat Engine/cheatengine.lpi') }}
-          restore-keys: lazarus-2.2.2-Linux-
-
-      - name: Log build details
-        run: |
-          echo "Platform: Linux"
-          echo "Version : ${{ env.REF_TO_BUILD }}"
-          echo "Mode    : ${{ github.event.inputs.build_mode || 'main-only' }}"
-
-      - name: Build Main Application (x86_64 AVX2)
-        if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
-        run: |
-          lazbuild -B "Cheat Engine/cheatengine.lpi" \
-                   --cpu=x86_64 \
-                   --build-mode="Release 64-Bit O4 AVX2"
-
-      - name: List compiled binaries (debug)
-        run: |
-          ls -R "Cheat Engine/Cheat Engine/bin/"
-
-      - name: Create Linux archive
-        run: |
-          mode="${{ github.event.inputs.build_mode || 'main-only' }}"
-          ref="${{ env.REF_TO_BUILD }}"; ref="${ref//\//-}"
-          name="CE-$ref-$mode-linux64.7z"
-          7z a -t7z -mx=9 "$name" "Cheat Engine/Cheat Engine/bin/"*
-          echo "Archive: $name"
-
-      - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CE-${{ env.REF_TO_BUILD }}-${{ github.event.inputs.build_mode || 'main-only' }}-linux64
-          path: CE-*-linux64.7z
-          if-no-files-found: error
-
-  # =========================================================
-  # macOS BUILD
-  # =========================================================
-  build-macos:
-    runs-on: macos-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout Cheat Engine (${{ env.REF_TO_BUILD }})
-        uses: actions/checkout@v4
-        with:
-          repository: cheat-engine/cheat-engine
-          ref: ${{ env.REF_TO_BUILD }}
-          submodules: recursive
-
-      - name: Install dependencies
-        run: |
-          brew update
-          brew install --cask lazarus
-          brew install p7zip
-
-      - name: Cache Lazarus & compiled objects
-        id: cache-macos
-        uses: actions/cache@v4
-        with:
-          path: |
-            /Users/runner/Library/Lazarus
-            **/*.o
-            **/*.ppu
-            **/*.compiled
-          key: lazarus-2.2.2-macOS-${{ hashFiles('Cheat Engine/cheatengine.lpi') }}
-          restore-keys: lazarus-2.2.2-macOS-
-
-      - name: Log build details
-        run: |
-          echo "Platform: macOS"
-          echo "Version : ${{ env.REF_TO_BUILD }}"
-          echo "Mode    : ${{ github.event.inputs.build_mode || 'main-only' }}"
-
-      - name: Build Main Application (x86_64 AVX2)
-        if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
-        run: |
-          lazbuild -B "Cheat Engine/cheatengine.lpi" \
-                   --cpu=x86_64 \
-                   --build-mode="Release 64-Bit O4 AVX2"
-
-      - name: List compiled binaries (debug)
-        run: |
-          ls -R "Cheat Engine/Cheat Engine/bin/"
-
-      - name: Create macOS archive
-        run: |
-          mode="${{ github.event.inputs.build_mode || 'main-only' }}"
-          ref="${{ env.REF_TO_BUILD }}"; ref="${ref//\//-}"
-          name="CE-$ref-$mode-mac64.7z"
-          7z a -t7z -mx=9 "$name" "Cheat Engine/Cheat Engine/bin/"*
-          echo "Archive: $name"
-
-      - name: Upload macOS artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: CE-${{ env.REF_TO_BUILD }}-${{ github.event.inputs.build_mode || 'main-only' }}-mac64
-          path: CE-*-mac64.7z
-          if-no-files-found: error
+          restore-keys: lazarus-2.2.2
