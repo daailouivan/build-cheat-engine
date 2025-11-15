@@ -42,7 +42,7 @@ env:
 # ──────────────────────────────────────────────────────────────
 jobs:
   # =========================================================
-  # WINDOWS BUILD (lazbuild fixed with full path)
+  # WINDOWS BUILD (Dynamic lazbuild path)
   # =========================================================
   build-windows:
     runs-on: windows-latest
@@ -75,25 +75,21 @@ jobs:
           lazarus-version: "2.2.2"
 
       # ---------------------------------------------------------
-      # Add Lazarus to PATH (for other tools)
+      # CRITICAL: Find lazbuild.exe in versioned folder
       # ---------------------------------------------------------
-      - name: Add Lazarus to PATH
-        run: |
-          echo "C:\lazarus" >> $env:GITHUB_PATH
-
-      # ---------------------------------------------------------
-      # CRITICAL: Verify lazbuild.exe exists and is callable
-      # ---------------------------------------------------------
-      - name: Verify lazbuild.exe
+      - name: Locate lazbuild.exe
+        id: find-lazbuild
         shell: pwsh
         run: |
-          $lazbuild = "C:\lazarus\lazbuild.exe"
-          if (-not (Test-Path $lazbuild)) {
-            Write-Error "lazbuild.exe not found at $lazbuild"
+          $pattern = "C:\lazarus\lazarus-*\lazbuild.exe"
+          $lazbuild = Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $lazbuild) {
+            Write-Error "lazbuild.exe not found in C:\lazarus\lazarus-*"
             exit 1
           }
-          Write-Output "lazbuild found: $lazbuild"
-          & $lazbuild --version
+          Write-Output "Found lazbuild: $($lazbuild.FullName)"
+          Write-Output "LAZBUILD_PATH=$($lazbuild.FullName)" >> $env:GITHUB_ENV
+          & $lazbuild.FullName --version
 
       - name: Log build details
         shell: pwsh
@@ -101,15 +97,16 @@ jobs:
           Write-Output "Platform: Windows"
           Write-Output "Version : ${{ env.REF_TO_BUILD }}"
           Write-Output "Mode    : ${{ github.event.inputs.build_mode || 'main-only' }}"
+          Write-Output "lazbuild: $env:LAZBUILD_PATH"
 
       # ---------------------------------------------------------
-      # BUILD: Use FULL PATH to lazbuild.exe
+      # BUILD: Use discovered path
       # ---------------------------------------------------------
       - name: Build Main Application (x86_64 AVX2)
         if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
         shell: pwsh
         run: |
-          & "C:\lazarus\lazbuild.exe" -B "Cheat Engine/cheatengine.lpi" `
+          & "$env:LAZBUILD_PATH" -B "Cheat Engine/cheatengine.lpi" `
                    --cpu=x86_64 `
                    --build-mode="Release 64-Bit O4 AVX2"
 
@@ -135,12 +132,11 @@ jobs:
           if-no-files-found: error
 
   # =========================================================
-  # LINUX BUILD (unchanged)
+  # LINUX & macOS (unchanged – already working)
   # =========================================================
   build-linux:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-
     steps:
       - name: Checkout Cheat Engine (${{ env.REF_TO_BUILD }})
         uses: actions/checkout@v4
@@ -148,20 +144,11 @@ jobs:
           repository: cheat-engine/cheat-engine
           ref: ${{ env.REF_TO_BUILD }}
           submodules: recursive
-
       - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y lazarus p7zip-full
+      - name: Build Main Application (x86_64 AVX2)
+        if: ${{ github.event.inputs.build_mode == 'main-only' || !github.event.inputs.build_mode }}
+        run: lazbuild -B "Cheat Engine/cheatengine.lpi" --cpu=x86_64 --build-mode="Release 64-Bit O4 AVX2"
+      - name: Create Linux archive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y lazarus p7zip-full
-
-      - name: Cache Lazarus & compiled objects
-        id: cache-linux
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.lazarus
-            **/*.o
-            **/*.ppu
-            **/*.compiled
-          key: lazarus-2.2.2-Linux-${{ hashFiles('Cheat Engine/cheatengine.lpi') }}
-          restore-keys: lazarus-2.2.2
+          mode="${{ github.event.inputs.build_mode || 'main-only
